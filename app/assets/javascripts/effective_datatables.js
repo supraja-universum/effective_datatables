@@ -12,9 +12,6 @@
 
 //= require dataTables/dataTables.colReorder.min
 
-//= require dataTables/responsive/dataTables.responsive.min
-//= require dataTables/responsive/responsive.bootstrap.min
-
 //= require effective_datatables/bulk_actions
 //= require effective_datatables/initialize
 
