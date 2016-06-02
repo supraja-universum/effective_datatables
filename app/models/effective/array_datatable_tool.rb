@@ -3,7 +3,7 @@ module Effective
   class ArrayDatatableTool
     attr_accessor :table_columns
 
-    delegate :order_name, :order_direction, :page, :per_page, :search_column, :display_table_columns, :to => :@datatable
+    delegate :page, :per_page, :search_column, :order_column, :display_table_columns, :to => :@datatable
 
     def initialize(datatable, table_columns)
       @datatable = datatable
@@ -14,37 +14,41 @@ module Effective
       @search_terms ||= @datatable.search_terms.select { |name, search_term| table_columns.key?(name) }
     end
 
-    def order_column
-      @order_column ||= table_columns[order_name]
+    def order_by_column
+      @order_by_column ||= table_columns[@datatable.order_name]
     end
 
     def order(collection)
-      if order_column.present?
-        index = display_index(order_column)
+      return collection unless order_by_column.present?
 
-        if order_direction == 'ASC'
-          collection.sort! do |x, y|
-            if (x[index] && y[index])
-              x[index] <=> y[index]
-            elsif x[index]
-              -1
-            elsif y[index]
-              1
-            else
-              0
-            end
+      column_order = order_column(collection, order_by_column, @datatable.order_direction, display_index(order_by_column))
+      raise 'order_column must return an Array' unless column_order.kind_of?(Array)
+      column_order
+    end
+
+    def order_column_with_defaults(collection, table_column, direction, index)
+      if direction == :asc
+        collection.sort! do |x, y|
+          if (x[index] && y[index])
+            cast_array_column_value(table_column, x[index]) <=> cast_array_column_value(table_column, y[index])
+          elsif x[index]
+            -1
+          elsif y[index]
+            1
+          else
+            0
           end
-        else
-          collection.sort! do |x, y|
-            if (x[index] && y[index])
-              y[index] <=> x[index]
-            elsif x[index]
-              1
-            elsif y[index]
-              -1
-            else
-              0
-            end
+        end
+      else
+        collection.sort! do |x, y|
+          if (x[index] && y[index])
+            cast_array_column_value(table_column, y[index]) <=> cast_array_column_value(table_column, x[index])
+          elsif x[index]
+            1
+          elsif y[index]
+            -1
+          else
+            0
           end
         end
       end
@@ -54,24 +58,21 @@ module Effective
 
     def search(collection)
       search_terms.each do |name, search_term|
-        column_search = search_column(collection, table_columns[name], search_term)
+        column_search = search_column(collection, table_columns[name], search_term, display_index(table_columns[name]))
         raise 'search_column must return an Array object' unless column_search.kind_of?(Array)
         collection = column_search
       end
       collection
     end
 
-    def search_column_with_defaults(collection, table_column, search_term)
-      search_term = search_term.downcase
-      index = display_index(table_column)
+    def search_column_with_defaults(collection, table_column, search_term, index)
+      search_term = search_term.downcase if table_column[:filter][:fuzzy]
 
       collection.select! do |row|
-        value = row[index].to_s.downcase
-
-        if table_column[:filter][:type] == :select && table_column[:filter][:fuzzy] != true
-          value == search_term
+        if table_column[:filter][:fuzzy]
+          row[index].to_s.downcase.include?(search_term)
         else
-          value.include?(search_term)
+          row[index] == search_term
         end
       end || collection
     end
@@ -84,6 +85,19 @@ module Effective
 
     def display_index(column)
       display_table_columns.present? ? display_table_columns.keys.index(column[:name]) : column[:array_index]
+    end
+
+    # When we order by Array, it's already a string.
+    # This gives us a mechanism to sort numbers as numbers
+    def cast_array_column_value(table_column, value)
+      case table_column[:type]
+      when :number, :price, :decimal, :float
+        (value.to_s.gsub(/[^0-9|\.]/, '').to_f rescue 0.00)
+      when :integer
+        (value.to_s.gsub(/\D/, '').to_i rescue 0)
+      else
+        value
+      end
     end
 
   end

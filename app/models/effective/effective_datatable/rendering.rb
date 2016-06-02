@@ -5,10 +5,6 @@ module Effective
     module Rendering
       BLANK = ''.freeze
 
-      def finalize(collection) # Override me if you like
-        collection
-      end
-
       protected
 
       # So the idea here is that we want to do as much as possible on the database in ActiveRecord
@@ -37,7 +33,7 @@ module Effective
           self.display_records = col.size
         end
 
-        if array_tool.order_column.present?
+        if array_tool.order_by_column.present?
           col = self.arrayize(col)
           col = array_tool.order(col)
         end
@@ -92,6 +88,8 @@ module Effective
                 locals[:unarchive_action] = (EffectiveDatatables.authorized?(controller, :unarchive, collection_class) rescue false)
               end
             end
+
+            # If locals[:show_action] == :authorize_each, this will get run again.
 
             rendered[name] = (render(
               :partial => opts[:partial],

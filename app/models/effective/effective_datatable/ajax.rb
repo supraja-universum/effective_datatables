@@ -19,8 +19,8 @@ module Effective
       def order_name
         @order_name ||= begin
           if params[:order] && params[:columns]
-            order_column_index = (params[:order].first[1][:column] rescue '0')
-            (params[:columns][order_column_index] || {})[:name]
+            order_by_column_index = (params[:order].first[1][:column] rescue '0')
+            (params[:columns][order_by_column_index] || {})[:name]
           elsif @default_order.present?
             @default_order.keys.first
           end || table_columns.find { |col, opts| opts[:type] != :bulk_actions_column }.first
@@ -33,11 +33,11 @@ module Effective
 
       def order_direction
         @order_direction ||= if params[:order].present?
-          params[:order].first[1][:dir] == 'desc' ? 'DESC' : 'ASC'
+          params[:order].first[1][:dir] == 'desc' ? :desc : :asc
         elsif @default_order.present?
-          @default_order.values.first.to_s.downcase == 'desc' ? 'DESC' : 'ASC'
+          @default_order.values.first.to_s.downcase == 'desc' ? :desc : :asc
         else
-          'ASC'
+          :asc
         end
       end
 
@@ -62,15 +62,6 @@ module Effective
               terms[name] = values[:filter][:selected] if values[:filter][:selected].present?
             end
           end
-        end
-      end
-
-      # This is here so classes that inherit from Datatables can can override the specific where clauses on a search column
-      def search_column(collection, table_column, search_term)
-        if table_column[:array_column]
-          array_tool.search_column_with_defaults(collection, table_column, search_term)
-        else
-          table_tool.search_column_with_defaults(collection, table_column, search_term)
         end
       end
 

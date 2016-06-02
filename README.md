@@ -136,7 +136,7 @@ module Effective
 
         table_column :user
 
-        table_column :post_category_id, :filter => {:type => :select, :values => Proc.new { PostCategory.all } } do |post|
+        table_column :post_category_id, :filter => {:as => :select, :collection => Proc.new { PostCategory.all } } do |post|
           post.post_category.name.titleize
         end
 
@@ -267,7 +267,7 @@ table_column :user
 # Will have the same behaviour as declaring
 datatable do
   if attributes[:user_id].blank?
-    table_column :user_id, :filter => {:type => :select, :values => Proc.new { User.all.map { |user| [user.id, user.to_s] }.sort { |x, y| x[1] <=> y[1] } } } do |post|
+    table_column :user_id, :filter => {:as => :select, :collection => Proc.new { User.all.map { |user| [user.id, user.to_s] }.sort { |x, y| x[1] <=> y[1] } } } do |post|
       post.user.to_s
     end
   end
@@ -284,13 +284,25 @@ The difference occurs with sorting and filtering:
 
 array_columns perform searching and sorting on the computed results after all columns have been rendered.
 
-With a `table_column`, the frontend sends some search terms to the server, the raw database table is searched & sorted using standard ActiveRecord .where(), the appropriate rows returned, and then each row is rendered as per the rendering options.
+With a `table_column`, the frontend sends some search terms to the server, the raw database table is searched & sorted using standard ActiveRecord .where() and .order(), the appropriate rows returned, and then each row is rendered as per the rendering options.
 
 With an `array_column`, the front end sends some search terms to the server, all rows are returned and rendered, and then the rendered output is searched & sorted.
 
 This allows the output of an `array_column` to be anything complex that cannot be easily computed from the database.
 
 When searching & sorting with a mix of table_columns and array_columns, all the table_columns are processed first so the most work is put on the database, the least on rails.
+
+If you're overriding the `search_column` or `order_column` behaviour of an `array_column`, keep in mind that all values will be strings.
+
+This has the side effect of ordering an `array_column` of numbers, as if they were strings.  To keep them ordered as numbers, call:
+
+```ruby
+array_column :price, type: :number do |product|
+  number_to_currency(product.price)
+end
+```
+
+The above code will output the price as a currency, but still sort the values as numbers rather than as strings.
 
 
 ### General Options
@@ -299,7 +311,7 @@ The following options control the general behaviour of the column:
 
 ```ruby
 :column => 'users.id'     # Set this if you're doing something tricky with the database.  Used internally for .order() and .where() clauses
-:type => :string          # Derived from the ActiveRecord attribute default datatype.  Controls searching behaviour.  Valid options include :string, :text, :datetime, :integer, :boolean, :year
+:type => :string          # Derived from the ActiveRecord attribute default datatype.  Controls searching behaviour.  Valid options include :string, :text, :datetime, :date, :integer, :boolean, :year
 ```
 
 ### Display Options
@@ -325,17 +337,16 @@ The following options control the filtering behaviour of the column:
 table_column :created_at, :filter => false    # Disable filtering on this column entirely
 table_column :created_at, :filter => {...}    # Enable filtering with these options
 
-:filter => {:type => :number}
-:filter => {:type => :text}
+:filter => {:as => :number}
+:filter => {:as => :text}
 
-:filter => {:type => :select, :values => ['One', 'Two'], :selected => 'Two'}
-:filter => {:type => :select, :values => [*2010..(Time.zone.now.year+6)]}
-:filter => {:type => :select, :values => Proc.new { PostCategory.all } }
-:filter => {:type => :select, :values => Proc.new { User.all.order(:email).map { |obj| [obj.id, obj.email] } } }
+:filter => {:as => :select, :collection => ['One', 'Two'], :selected => 'Two'}
+:filter => {:as => :select, :collection => [*2010..(Time.zone.now.year+6)]}
+:filter => {:as => :select, :collection => Proc.new { PostCategory.all } }
+:filter => {:as => :select, :collection => Proc.new { User.all.order(:email).map { |obj| [obj.id, obj.email] } } }
 
-:filter => {:type => :grouped_select, :values => {'Active' => Events.active, 'Past' => Events.past }}
-:filter => {:type => :grouped_select, :values => {'Active' => [['Event A', 1], ['Event B', 2]], 'Past' => [['Event C', 3], ['Event D', 4]]} }
-
+:filter => {:as => :grouped_select, :collection => {'Active' => Events.active, 'Past' => Events.past }}
+:filter => {:as => :grouped_select, :collection => {'Active' => [['Event A', 1], ['Event B', 2]], 'Past' => [['Event C', 3], ['Event D', 4]]} }
 ```
 
 Some additional, lesser used options include:
@@ -427,7 +438,7 @@ filterable  # whether the dataTable is filterable
 
 ## actions_column
 
-Creates a column with links to this resource's Show, Edit and Destroy actions.
+Creates a column with links to this resource's `show`, `edit` and `destroy` actions.
 
 Sets `responsivePriority: 0` so the column is last to collapse when the table is shrunk down.
 
@@ -437,7 +448,37 @@ Override the default actions by passing your own partial:
 actions_column partial: 'admin/posts/actions'
 ```
 
-Optionally uses the authorization method (below) to determine if the `current_user` has permission for each of these actions.
+### Showing action buttons
+
+The show/edit/destroy action buttons can be configured to always show, always hide, or to consider the current_user's permission level.
+
+To always show / hide:
+
+```ruby
+actions_column show: false, edit: true, destroy: true, unarchive: true
+```
+
+To authorize based on the current_user and the `config.authorization_method`:
+
+```ruby
+actions_column show: :authorize
+```
+
+The above will call the effective_datatables `config.authorization_method` just once to see if the current_user has permission to show/edit/destroy the collection class.
+
+The action button will be displayed if `EffectiveDatatables.authorized?(controller, :edit, Post)` returns true.
+
+To call authorize on each individual resource:
+
+```ruby
+actions_column show: :authorize_each
+```
+
+Or via a Proc:
+
+```ruby
+actions_column show: Proc.new { |resource| can?(:show, resource.parent) }
+```
 
 See the `config/initializers/effective_datatable.rb` file for more information.
 
@@ -537,22 +578,63 @@ This gem does its best to provide "just works" filtering of both raw SQL (table_
 
 It's also very easy to override the filter behaviour on a per-column basis.
 
-Keep in mind, the filter terms on hidden columns will still be considered in filter results.
+Keep in mind, that filter terms applied to hidden columns will still be considered in filter results.
 
-For custom filter behaviour, specify a `def search_column` method in the datatables model file:
+To customize filter behaviour, specify a `def search_column` method in the datatables model file.
+
+If the table column being customized is a table_column:
 
 ```ruby
-def collection
-  User.unscoped.uniq
-    .joins('LEFT JOIN customers ON customers.user_id = users.id')
-    .select('users.*')
-    .select('customers.stripe_customer_id AS stripe_customer_id')
-    .includes(:addresses)
-end
-
-def search_column(collection, table_column, search_term)
+def search_column(collection, table_column, search_term, sql_column)
   if table_column[:name] == 'subscription_types'
     collection.where('subscriptions.stripe_plan_id ILIKE ?', "%#{search_term}%")
+  else
+    super
+  end
+end
+```
+
+And if the table column being customized is an array_column:
+
+```ruby
+def search_column(collection, table_column, search_term, index)
+  if table_column[:name] == 'price'
+    collection.select! { |row| row[index].include?(search_term) }
+  else
+    super
+  end
+end
+```
+
+### Customize Order Behaviour
+
+The order behaviour can be overridden on a per-column basis.
+
+To custom order behaviour, specify a `def order_column` method in the datatables model file.
+
+If the table column being customized is a table_column:
+
+```ruby
+def order_column(collection, table_column, direction, sql_column)
+  if table_column[:name] == 'subscription_types'
+    sql_direction = (direction == :desc ? 'DESC' : 'ASC')
+    collection.joins(:subscriptions).order("subscriptions.stripe_plan_id #{sql_direction}")
+  else
+    super
+  end
+end
+```
+
+And if the table column being customized is an array_column:
+
+```ruby
+def order_column(collection, table_column, direction, index)
+  if table_column[:name] == 'price'
+    if direction == :asc
+      collection.sort! { |a, b| a[index].gsub(/\D/, '').to_i <=> b[index].gsub(/\D/, '').to_i }
+    else
+      collection.sort! { |a, b| b[index].gsub(/\D/, '').to_i <=> a[index].gsub(/\D/, '').to_i }
+    end
   else
     super
   end
@@ -679,7 +761,7 @@ the filters and sorting will be automatically configured.
 
 Just define `table_column :roles`
 
-The `EffectiveRoles.roles` collection will be used for the filter values, and sorting will be done by roles_mask.
+The `EffectiveRoles.roles` collection will be used for the filter collection, and sorting will be done by roles_mask.
 
 
 ## Get access to the raw results

@@ -54,7 +54,7 @@ module EffectiveDatatablesHelper
   def datatable_header_filter(form, name, value, opts)
     return render(partial: opts[:header_partial], locals: {form: form, name: (opts[:label] || name), column: opts}) if opts[:header_partial].present?
 
-    case opts[:filter][:type]
+    case opts[:filter][:as]
     when :string, :text, :number
       form.input name, label: false, required: false, value: value,
         as: :string,
@@ -77,7 +77,7 @@ module EffectiveDatatablesHelper
     when :select, :boolean
       form.input name, label: false, required: false, value: value,
         as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_select) ? :effective_select : :select),
-        collection: opts[:filter][:values],
+        collection: opts[:filter][:collection],
         selected: opts[:filter][:selected],
         multiple: opts[:filter][:multiple] == true,
         include_blank: (opts[:label] || name.titleize),
@@ -86,7 +86,7 @@ module EffectiveDatatablesHelper
     when :grouped_select
       form.input name, label: false, required: false, value: value,
         as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_select) ? :effective_select : :grouped_select),
-        collection: opts[:filter][:values],
+        collection: opts[:filter][:collection],
         selected: opts[:filter][:selected],
         multiple: opts[:filter][:multiple] == true,
         include_blank: (opts[:label] || name.titleize),
