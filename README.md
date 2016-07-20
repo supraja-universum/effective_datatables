@@ -354,6 +354,8 @@ Some additional, lesser used options include:
 ```ruby
 :filter => {:fuzzy => true} # Will use an ILIKE/includes rather than = when filtering.  Use this for selects.
 :filter => {sql_operation => :having}  # Will use .having() instead of .where() to handle aggregate columns (autodetected)
+:filter => {include_blank: false}
+:filter => {placeholder: false}
 ```
 
 ### Rendering Options
@@ -535,6 +537,67 @@ resources :posts do
 end
 ```
 
+## scopes
+
+When declaring a scope, a form field will automatically be placed above the datatable that can filter on the collection.
+
+The value of the scope, its default value, will be available for use anywehre in your datatable via the `attributes` hash.
+
+```ruby
+scopes do
+  scope :start_date, Time.zone.now-3.months, filter: { input_html: { class: 'datepicker' } }
+end
+```
+
+(scopes is declared outside of the `datatable do ... end` block)
+
+and then in your collection, or any `table_column` block:
+
+```ruby
+def collection
+  Post.where('updated_at > ?', attributes[:start_date])
+end
+```
+
+As well, you need to change the controller where you define the datatable to be aware of the scope params.
+
+```ruby
+@datatable = Effective::Datatables::Posts.new(params[:scopes])
+```
+
+So initially, the `:start_date` will have the value of `Time.zone.now-3.months` and when submitted by the form, the value will be set there.
+
+The form value will come back as a string, so you may need to `Time.zone.parse` that value.
+
+Pass `scope :start_date, Time.zone.now-3.months, fallback: true` to fallback to the default value when the form submission is not present.
+
+Any `filter: { ... }` options will be passed straight into simple_form.
+
+## aggregates
+
+Each `aggregate` directive adds an additional row to the table's tfoot.
+
+This feature is intended to display a sum or average of all the table's currently displayed values.
+
+```ruby
+aggregate :average do |table_column, values, table_data|
+  if table_column[:name] == 'user'
+    'Average'
+  else
+    average = (values.sum { |value| convert_to_column_type(table_column, value) } / [values.length, 1].max)
+    content_tag(:span, number_to_percentage(average, precision: 0))
+  end
+end
+```
+
+The above aggregate block will be called for each currently visible column in a datatable.
+
+Here `table_column` is the table_column being rendered, `values` is an array of all the values in this one column. `table_data` is the whole transposed array of data.
+
+The values will be whatever datatype each table_column returns.
+
+It might be the case that the formatted values (strings) are returned, which is why `convert_to_column_type` is used above.
+
 ## table_columns
 
 Quickly create multiple table_columns all with default options:
@@ -570,6 +633,24 @@ There are a few other ways to customize the behaviour of effective_datatables
 Check whether the datatable has records by calling `@datatable.empty?` and `@datatable.present?`.
 
 Keep in mind, these methods look at the collection's total records, not the currently displayed/filtered records.
+
+### Hide the buttons
+
+To hide the Bulk Actions, Show / Hide Columns, CSV, Excel, Print, etc buttons:
+
+```ruby
+render_datatable(@datatable, buttons: false)
+```
+
+### Override javascript options
+
+The javascript options used to initialize a datatable can be overriden as follows:
+
+```ruby
+render_datatable(@datatable, {dom: "<'row'<'col-sm-12'tr>>", autoWidth: true})
+```
+
+Please see [datatables options](https://datatables.net/reference/option/) for a list of initialization options.
 
 
 ### Customize Filter Behaviour

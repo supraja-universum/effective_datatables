@@ -88,8 +88,13 @@ module Effective
 
         obj = reflection.build_association({})
         klass = obj.class
+        polymorphic = reflection.options[:as].present?
 
-        inverse = reflection.inverse_of || klass.reflect_on_association(collection.table_name) || obj.class.reflect_on_association(collection.table_name.singularize)
+        inverse = reflection.inverse_of
+        inverse ||= klass.reflect_on_association(reflection.options[:as]) if polymorphic
+        inverse ||= klass.reflect_on_association(collection.table_name)
+        inverse ||= obj.class.reflect_on_association(collection.table_name.singularize)
+
         raise "unable to find #{klass.name} has_many :#{collection.table_name} or belongs_to :#{collection.table_name.singularize} associations" unless inverse
 
         ids = if [:select, :grouped_select].include?(table_column[:filter][:as])
@@ -97,7 +102,11 @@ module Effective
           inverse_ids = term.split(',').map { |term| (term = term.to_i) == 0 ? nil : term }.compact
           return collection unless inverse_ids.present?
 
-          klass.where(id: inverse_ids).joins(inverse.name).pluck(inverse.foreign_key)
+          if polymorphic
+            klass.where(id: inverse_ids).where(reflection.type => collection.klass.name).pluck(reflection.foreign_key)
+          else
+            klass.where(id: inverse_ids).joins(inverse.name).pluck(inverse.foreign_key)
+          end
         else
           # Treat the search term as a string.
           klass_columns = if (sql_column == klass.table_name) # No custom column has been defined
@@ -106,9 +115,17 @@ module Effective
             [sql_column.gsub("#{klass.table_name}.", '')] # table_column :order_items, column: 'order_items.title'
           end
 
+          if polymorphic
+            klass_columns -= [reflection.type]
+          end
+
           conditions = klass_columns.map { |col_name| "#{klass.table_name}.#{col_name} #{ilike} :term" }
 
-          klass.where(conditions.join(' OR '), term: "%#{term}%", num: term.to_i).joins(inverse.name).pluck(inverse.foreign_key)
+          if polymorphic
+            klass.where(conditions.join(' OR '), term: "%#{term}%", num: term.to_i).where(reflection.type => collection.klass.name).pluck(reflection.foreign_key)
+          else
+            klass.where(conditions.join(' OR '), term: "%#{term}%", num: term.to_i).joins(inverse.name).pluck(inverse.foreign_key)
+          end
         end
 
         collection.public_send(sql_op, id: ids)
@@ -194,7 +211,7 @@ module Effective
       when :price
         price_in_cents = (term.gsub(/[^0-9|\.]/, '').to_f * 100.0).to_i
         collection.public_send(sql_op, "#{sql_column} = :term", term: price_in_cents)
-      when :currency, :decimal, :number
+      when :currency, :decimal, :number, :percentage
         collection.public_send(sql_op, "#{sql_column} = :term", term: term.gsub(/[^0-9|\.]/, '').to_f)
       else
         collection.public_send(sql_op, "#{sql_column} = :term", term: term)

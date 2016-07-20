@@ -137,7 +137,7 @@ module Effective
                 obj.send(name)
               end
             rescue => e
-              obj.try(:[], name)
+              Rails.env.production? ? obj.try(:[], name) : raise(e)
             end
           end
         end
@@ -154,7 +154,7 @@ module Effective
               row[index] = value.to_s
             end
 
-            case opts[:type]
+            case (opts[:format] || opts[:type])
             when :belongs_to, :belongs_to_polymorphic
               row[index] = value.to_s
             when :has_many
@@ -183,6 +183,8 @@ module Effective
               row[index] = number_to_currency(value / 100.0)
             when :currency
               row[index] = number_to_currency(value || 0)
+            when :percentage
+              row[index] = number_to_percentage(value || 0)
             when :integer
               if EffectiveDatatables.integer_format.kind_of?(Symbol)
                 row[index] = view.instance_exec { public_send(EffectiveDatatables.integer_format, value) }
@@ -204,6 +206,26 @@ module Effective
         end
 
         collection
+      end
+
+      # This should return an Array of values the same length as table_data
+      def aggregate_data(table_data)
+        return false unless aggregates.present?
+
+        values = table_data.transpose
+
+        aggregates.map do |name, options|
+          (display_table_columns || table_columns).map.with_index do |(name, column), index|
+
+            if column[:visible] != true
+              ''
+            elsif (options[:block] || options[:proc]).respond_to?(:call)
+              view.instance_exec(column, (values[index] || []), values, &(options[:block] || options[:proc]))
+            else
+              ''
+            end
+          end
+        end
       end
 
       private

@@ -6,6 +6,9 @@ initializeDataTables = ->
     simple = (datatable.data('simple') == true)
     input_js_options = datatable.data('input-js-options') || {}
 
+    if input_js_options['buttons'] == false
+      input_js_options['buttons'] = []
+
     init_options =
       ajax: { url: datatable.data('source'), type: 'POST' }
       autoWidth: false
@@ -23,21 +26,21 @@ initializeDataTables = ->
           exportOptions:
             format:
               header: (str) -> $("<div>#{str}</div>").children('.filter-label').first().text()
-            columns: ':visible:not(.col-actions)'
+            columns: ':not(.col-actions)'
         },
         {
           extend: 'csv',
           exportOptions:
             format:
               header: (str) -> $("<div>#{str}</div>").children('.filter-label').first().text()
-            columns: ':visible:not(.col-actions)'
+            columns: ':not(.col-actions)'
         },
         {
           extend: 'excel',
           exportOptions:
             format:
               header: (str) -> $("<div>#{str}</div>").children('.filter-label').first().text()
-            columns: ':visible:not(.col-actions)'
+            columns: ':not(.col-actions)'
         },
         {
           extend: 'print',
@@ -71,6 +74,13 @@ initializeDataTables = ->
         selected = $table.data('bulk-actions-restore-selected-values')
         completeBulkAction($table, selected) if selected && selected.length > 0
 
+        if settings['json']
+          if settings['json']['aggregates']
+            drawAggregates($table, settings['json']['aggregates'])
+
+          if settings['json']['charts']
+            drawCharts($table, settings['json']['charts'])
+
     # Copies the bulk actions html, stored in a data attribute on the table, into the buttons area
     initializeBulkActions = (api) ->
       $table = $(api.table().node())
@@ -89,6 +99,21 @@ initializeDataTables = ->
       $wrapper = $table.closest('.dataTables_wrapper')
       $wrapper.children().first().find('.buttons-bulk-actions').children('button').removeAttr('disabled')
       $table.siblings('.dataTables_processing').html('Processing...')
+
+    drawAggregates = ($table, aggregates) ->
+      $tfoot = $table.find('tfoot').first()
+
+      $.each aggregates, (row, values) =>
+        $row = $tfoot.children().eq(row)
+
+        if $row
+          $.each values, (col, value) => $row.children().eq(col).html(value)
+
+    drawCharts = ($table, charts) ->
+      $.each charts, (name, data) =>
+        $(".effective-datatables-chart[data-name='#{name}']").each (_, obj) =>
+          chart = new google.visualization[data['type']](obj)
+          chart.draw(google.visualization.arrayToDataTable(data['data']), data['options'])
 
     # Appends the filter html, stored in the column definitions, into each column header
     initializeFilters = (api) ->
@@ -114,15 +139,14 @@ initializeDataTables = ->
         $input.parent().on 'mousedown', (event) -> event.stopPropagation() # Dont order columns when you click inside the input
 
         if $input.is('select')
-          $input.on 'change', (event) -> dataTableSearch(event)
+          $input.on 'change', (event) -> dataTableSearch($(event.currentTarget))
         else if $input.is('input')
-          $input.keyup($.debounce(300, dataTableSearch))
+          $input.delayedChange ($input) -> dataTableSearch($input)
 
     # Do the actual search
-    dataTableSearch = (event) ->   # This is the function called by a select or input to run the search
-      obj = $(event.currentTarget)
-      table = obj.closest('table.dataTable')
-      table.DataTable().column("#{obj.data('column-name')}:name").search(obj.val()).draw()
+    dataTableSearch = ($input) ->   # This is the function called by a select or input to run the search
+      table = $input.closest('table.dataTable')
+      table.DataTable().column("#{$input.data('column-name')}:name").search($input.val()).draw()
 
     if simple
       init_options['dom'] = "<'row'<'col-sm-12'tr>>" # Just show the table
@@ -133,7 +157,7 @@ initializeDataTables = ->
 
     # Apply EffectiveFormInputs to the Show x per page dropdown
     if datatable.data('effective-form-inputs')
-      table.closest('.dataTables_wrapper').find('.dataTables_length select').select2()
+      try table.closest('.dataTables_wrapper').find('.dataTables_length select').select2()
 
     # Capture column visibility changes and refresh datatable
     datatable.on 'column-visibility.dt', (event, settings, index, state) ->

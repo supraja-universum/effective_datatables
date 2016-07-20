@@ -4,8 +4,16 @@ module Effective
   module EffectiveDatatable
     module Options
 
-      def initialize_options
-        @table_columns = initialize_column_options(@table_columns)
+      def initialize_datatable_options
+        @table_columns = _initialize_datatable_options(@table_columns)
+      end
+
+      def initialize_scope_options
+        @scopes = _initialize_scope_options(@scopes)
+      end
+
+      def initialize_chart_options
+        @charts = _initialize_chart_options(@charts)
       end
 
       def quote_sql(name)
@@ -14,7 +22,34 @@ module Effective
 
       protected
 
-      def initialize_column_options(cols)
+      # The scope DSL is
+      # scope :start_date, default_value, options: {}
+      #
+      # The value might already be assigned, but if not, we have to assign the default to attributes
+
+      # A scope comes to us like {:start_date => {default: Time.zone.now, filter: {as: :select, collection: ... input_html :}}}
+      # We want to make sure an input_html: { value: default } exists
+      def _initialize_scope_options(scopes)
+        (scopes || []).each do |name, options|
+          value = attributes.key?(name) ? attributes[name] : options[:default]
+
+          if (options[:fallback] || options[:presence]) && attributes[name].blank? && attributes[name] != false
+            self.attributes[name] = options[:default]
+            value = options[:default]
+          end
+
+          options[:filter] ||= {}
+          options[:filter][:input_html] ||= {}
+          options[:filter][:input_html][:value] = value
+          options[:filter][:selected] = value
+        end
+      end
+
+      def _initialize_chart_options(charts)
+        charts
+      end
+
+      def _initialize_datatable_options(cols)
         sql_table = (collection.table rescue nil)
 
         # Here we identify all belongs_to associations and build up a Hash like:
@@ -81,16 +116,21 @@ module Effective
               :bulk_actions_column
             elsif name.include?('_address') && (collection_class.new rescue nil).respond_to?(:effective_addresses)
               :effective_address
-            elsif name == 'id' || name.include?('year') || name.include?('_id')
-              :non_formatted_integer
             elsif sql_column.try(:type).present?
               sql_column.type
+            elsif name.end_with?('_id')
+              :integer
             else
               :string # When in doubt
             end
           )
 
           cols[name][:class] = "col-#{cols[name][:type]} col-#{name} #{cols[name][:class]}".strip
+
+          # Formats
+          if name == 'id' || name.include?('year') || name.end_with?('_id')
+            cols[name][:format] = :non_formatted_integer
+          end
 
           # We can't really sort a HasMany or EffectiveAddress field
           if [:has_many, :effective_address].include?(cols[name][:type])

@@ -1,6 +1,6 @@
 :ruby
   effective_datatable_params = {
-    id: "#{datatable.to_param}-table",
+    id: "#{datatable.to_param}-table-#{Time.zone.now.nsec}",
     class: "#{datatable.table_html_class}",
     data: {
       'effective-form-inputs' => defined?(EffectiveFormInputs),
@@ -23,7 +23,14 @@
         %th= opts[:label] || name
 
   %tbody
-    - (datatable.to_json[:data] || []).each do |row|
+    - datatable.to_json[:data].each do |row|
       %tr
         - row.each do |col|
           %td= col.to_s.html_safe
+
+  - if datatable.aggregates.present?
+    %tfoot
+      - datatable.to_json[:aggregates].each do |row|
+        %tr
+          - row.each do |col|
+            %td= col.to_s.html_safe
