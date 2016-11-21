@@ -1,13 +1,40 @@
+# These are expected to be called by a developer.  They are part of the datatables DSL.
 module EffectiveDatatablesHelper
+
   def render_datatable(datatable, input_js_options = nil)
-    return unless datatable.present?
+    raise 'expected datatable to be present' unless datatable
+
     datatable.view ||= self
+
+    begin
+      EffectiveDatatables.authorized?(controller, :index, datatable.try(:collection_class) || datatable.try(:class)) || raise('unauthorized')
+    rescue => e
+      return content_tag(:p, "You are not authorized to view this datatable. (cannot :index, #{datatable.try(:collection_class) || datatable.try(:class)})")
+    end
 
     render partial: 'effective/datatables/datatable',
       locals: { datatable: datatable, input_js_options: input_js_options.try(:to_json) }
   end
 
+  def render_simple_datatable(datatable, input_js_options = nil)
+    raise 'expected datatable to be present' unless datatable
+
+    datatable.view ||= self
+    datatable.simple = true
+
+    begin
+      EffectiveDatatables.authorized?(controller, :index, datatable.try(:collection_class) || datatable.try(:class)) || raise('unauthorized')
+    rescue => e
+      return content_tag(:p, "You are not authorized to view this datatable. (cannot :index, #{datatable.try(:collection_class) || datatable.try(:class)})")
+    end
+
+    render partial: 'effective/datatables/datatable',
+      locals: {datatable: datatable, input_js_options: input_js_options.try(:to_json) }
+  end
+
   def render_datatable_scopes(datatable)
+    raise 'expected datatable to be present' unless datatable
+
     return unless datatable.scopes.present?
     datatable.view ||= self
 
@@ -15,6 +42,8 @@ module EffectiveDatatablesHelper
   end
 
   def render_datatable_charts(datatable)
+    raise 'expected datatable to be present' unless datatable
+
     return unless datatable.charts.present?
     datatable.view ||= self
 
@@ -22,6 +51,8 @@ module EffectiveDatatablesHelper
   end
 
   def render_datatable_chart(datatable, name)
+    raise 'expected datatable to be present' unless datatable
+
     return unless datatable.charts.present?
     return unless datatable.charts[name].present?
     datatable.view ||= self
@@ -40,106 +71,6 @@ module EffectiveDatatablesHelper
       locals: { datatable: datatable, chart: chart }
   end
 
-  def render_simple_datatable(datatable, input_js_options = nil)
-    return unless datatable.present?
-    datatable.view ||= self
-    datatable.simple = true
-
-    render partial: 'effective/datatables/datatable',
-      locals: {datatable: datatable, input_js_options: input_js_options.try(:to_json) }
-  end
-
-  def datatable_default_order(datatable)
-    [datatable.order_index, datatable.order_direction.downcase].to_json()
-  end
-
-  # https://datatables.net/reference/option/columns
-  def datatable_columns(datatable)
-    form = nil
-    simple_form_for(:datatable_filter, url: '#', html: {id: "#{datatable.to_param}-form"}) { |f| form = f }
-
-    datatable.table_columns.map do |name, options|
-      {
-        name: options[:name],
-        title: content_tag(:span, options[:label], class: 'filter-label'),
-        className: options[:class],
-        width: options[:width],
-        responsivePriority: (options[:responsivePriority] || 10000),  # 10,000 is datatables default
-        sortable: (options[:sortable] && !datatable.simple?),
-        visible: (options[:visible].respond_to?(:call) ? datatable.instance_exec(&options[:visible]) : options[:visible]),
-        filterHtml: (datatable_header_filter(form, name, datatable.search_terms[name], options) unless datatable.simple?),
-        filterSelectedValue: options[:filter][:selected]
-      }
-    end.to_json()
-  end
-
-  def datatable_bulk_actions(datatable)
-    bulk_actions_column = datatable.table_columns.find { |_, options| options[:bulk_actions_column] }.try(:second)
-    return false unless bulk_actions_column
-
-    {
-      dropdownHtml: render(
-        partial: bulk_actions_column[:dropdown_partial],
-        locals: { datatable: datatable, dropdown_block: bulk_actions_column[:dropdown_block] }.merge(bulk_actions_column[:partial_locals])
-      )
-    }.to_json()
-  end
-
-  def datatable_header_filter(form, name, value, opts)
-    return render(partial: opts[:header_partial], locals: {form: form, name: (opts[:label] || name), column: opts}) if opts[:header_partial].present?
-
-    include_blank = opts[:filter].key?(:include_blank) ? opts[:filter][:include_blank] : (opts[:label] || name.titleize)
-    placeholder = opts[:filter].key?(:placeholder) ? opts[:filter][:placeholder] : (opts[:label] || name.titleize)
-
-    case opts[:filter][:as]
-    when :string, :text, :number
-      form.input name, label: false, required: false, value: value,
-        as: :string,
-        placeholder: placeholder,
-        input_html: { name: nil, value: value, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index]} }
-    when :date
-      form.input name, label: false, required: false, value: value,
-        as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_date_picker) ? :effective_date_picker : :string),
-        placeholder: placeholder,
-        input_group: false,
-        input_html: { name: nil, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index]} },
-        input_js: { useStrict: true, keepInvalid: true }
-    when :datetime
-      form.input name, label: false, required: false, value: value,
-        as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_date_time_picker) ? :effective_date_time_picker : :string),
-        placeholder: placeholder,
-        input_group: false,
-        input_html: { name: nil, value: value, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index]} },
-        input_js: { useStrict: true, keepInvalid: true } # Keep invalid format like "2015-11" so we can still filter by year, month or day
-    when :select, :boolean
-      form.input name, label: false, required: false, value: value,
-        as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_select) ? :effective_select : :select),
-        collection: opts[:filter][:collection],
-        selected: opts[:filter][:selected],
-        multiple: opts[:filter][:multiple] == true,
-        include_blank: include_blank,
-        input_html: { name: nil, value: value, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index]} },
-        input_js: { placeholder: placeholder }
-    when :grouped_select
-      form.input name, label: false, required: false, value: value,
-        as: (ActionView::Helpers::FormBuilder.instance_methods.include?(:effective_select) ? :effective_select : :grouped_select),
-        collection: opts[:filter][:collection],
-        selected: opts[:filter][:selected],
-        multiple: opts[:filter][:multiple] == true,
-        include_blank: include_blank,
-        grouped: true,
-        polymorphic: opts[:filter][:polymorphic] == true,
-        group_label_method: opts[:filter][:group_label_method] || :first,
-        group_method: opts[:filter][:group_method] || :last,
-        input_html: { name: nil, value: value, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index]} },
-        input_js: { placeholder: placeholder }
-    when :bulk_actions_column
-      form.input name, label: false, required: false, value: nil,
-        as: :boolean,
-        input_html: { name: nil, value: nil, autocomplete: 'off', data: {'column-name' => opts[:name], 'column-index' => opts[:index], 'role' => 'bulk-actions-all'} }
-    end
-  end
-
   def datatables_admin_path?
     @datatables_admin_path ||= (
       path = request.path.to_s.downcase.chomp('/') + '/'
@@ -152,5 +83,57 @@ module EffectiveDatatablesHelper
   def datatables_active_admin_path?
     attributes[:active_admin_path] rescue false
   end
+
+  ### Icon Helpers for actions_column or elsewhere
+  def show_icon_to(path, options = {})
+    glyphicon_to('eye-open', path, {title: 'Show'}.merge(options))
+  end
+
+  def edit_icon_to(path, options = {})
+    glyphicon_to('edit', path, {title: 'Edit'}.merge(options))
+  end
+
+  def destroy_icon_to(path, options = {})
+    defaults = {title: 'Destroy', data: {method: :delete, confirm: 'Delete this item?'}}
+    glyphicon_to('trash', path, defaults.merge(options))
+  end
+
+  def archive_icon_to(path, options = {})
+    defaults = {title: 'Archive', data: {method: :delete, confirm: 'Archive this item?'}}
+    glyphicon_to('trash', path, defaults.merge(options))
+  end
+
+  def unarchive_icon_to(path, options = {})
+    defaults = {title: 'Unarchive', data: {confirm: 'Unarchive this item?'}}
+    glyphicon_to('retweet', path, defaults.merge(options))
+  end
+
+  def settings_icon_to(path, options = {})
+    glyphicon_to('cog', path, {title: 'Settings'}.merge(options))
+  end
+
+  def ok_icon_to(path, options = {})
+    glyphicon_to('ok', path, {title: 'OK'}.merge(options))
+  end
+
+  def approve_icon_to(path, options = {})
+    glyphicon_to('ok', path, {title: 'Approve'}.merge(options))
+  end
+
+  def remove_icon_to(path, options = {})
+    glyphicon_to('remove', path, {title: 'Remove'}.merge(options))
+  end
+
+  def glyphicon_to(icon, path, options = {})
+    content_tag(:a, options.merge(href: path)) do
+      if icon.start_with?('glyphicon-')
+        content_tag(:span, '', class: "glyphicon #{icon}")
+      else
+        content_tag(:span, '', class: "glyphicon glyphicon-#{icon}")
+      end
+    end
+  end
+  alias_method :bootstrap_icon_to, :glyphicon_to
+  alias_method :glyph_icon_to, :glyphicon_to
 
 end

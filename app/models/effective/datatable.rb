@@ -23,7 +23,7 @@ module Effective
     def initialize(*args)
       if args.present? && args.first != nil
         raise "#{self.class.name}.new() can only be initialized with a Hash like arguments" unless args.first.kind_of?(Hash)
-        args.first.each { |k, v| self.attributes[k] = v }
+        args.first.each { |k, v| self.attributes[k] = v.presence }
       end
 
       if respond_to?(:initialize_scopes)  # There was at least one scope defined in the scopes do .. end block
@@ -112,26 +112,15 @@ module Effective
     end
 
     def present?
-      total_records.to_i > 0
+      total_records > 0
     end
 
     def empty?
-      total_records.to_i == 0
+      total_records == 0
     end
 
     def total_records
-      @total_records ||= (
-        if active_record_collection?
-          if collection_class.connection.respond_to?(:unprepared_statement)
-            collection_sql = collection_class.connection.unprepared_statement { collection.to_sql }
-            (collection_class.connection.execute("SELECT COUNT(*) FROM (#{collection_sql}) AS datatables_total_count").first.values.first rescue 1).to_i
-          else
-            (collection_class.connection.execute("SELECT COUNT(*) FROM (#{collection.to_sql}) AS datatables_total_count").first.values.first rescue 1).to_i
-          end
-        else
-          collection.size
-        end
-      )
+      @total_records ||= (active_record_collection? ? active_record_collection_size(collection) : collection.size)
     end
 
     def view=(view_context)
@@ -193,12 +182,39 @@ module Effective
       @array_tool ||= ArrayDatatableTool.new(self, table_columns.select { |_, col| col[:array_column] })
     end
 
+    # TODO
+    # Check if collection has an order() clause and warn about it
+    # Usually that will make the table results look weird.
     def active_record_collection?
-      collection.ancestors.include?(ActiveRecord::Base) rescue false
+      @active_record_collection ||= (collection.ancestors.include?(ActiveRecord::Base) rescue false)
     end
 
     def array_collection?
       collection.kind_of?(Array) && collection.first.kind_of?(Array)
+    end
+
+    # Not every ActiveRecord query will work when calling the simple .count
+    # Custom selects:
+    #   User.select(:email, :first_name).count will throw an error
+    #   .count(:all) and .size seem to work
+    # Grouped Queries:
+    #   User.all.group(:email).count will return a Hash
+    def active_record_collection_size(collection)
+      count = (collection.size rescue nil)
+
+      case count
+      when Integer
+        count
+      when Hash
+        count.size  # This represents the number of displayed datatable rows, not the sum all groups (which might be more)
+      else
+        if collection.klass.connection.respond_to?(:unprepared_statement)
+          collection_sql = collection.klass.connection.unprepared_statement { collection.to_sql }
+          (collection.klass.connection.exec_query("SELECT COUNT(*) FROM (#{collection_sql}) AS datatables_total_count").rows[0][0] rescue 1)
+        else
+          (collection.klass.connection.exec_query("SELECT COUNT(*) FROM (#{collection.to_sql}) AS datatables_total_count").rows[0][0] rescue 1)
+        end.to_i
+      end
     end
 
   end

@@ -17,13 +17,7 @@ module Effective
           col = table_tool.search(col)
 
           if table_tool.search_terms.present? && array_tool.search_terms.blank?
-            if collection_class.connection.respond_to?(:unprepared_statement)
-              # https://github.com/rails/rails/issues/15331
-              col_sql = collection_class.connection.unprepared_statement { col.to_sql }
-              self.display_records = (collection_class.connection.execute("SELECT COUNT(*) FROM (#{col_sql}) AS datatables_filtered_count").first.values.first rescue 1).to_i
-            else
-              self.display_records = (collection_class.connection.execute("SELECT COUNT(*) FROM (#{col.to_sql}) AS datatables_filtered_count").first.values.first rescue 1).to_i
-            end
+            self.display_records = active_record_collection_size(col)
           end
         end
 
@@ -71,25 +65,7 @@ module Effective
 
             locals.merge!(opts[:partial_locals]) if opts[:partial_locals]
 
-            if active_record_collection?
-              if locals[:show_action] == :authorize
-                locals[:show_action] = (EffectiveDatatables.authorized?(controller, :show, collection_class) rescue false)
-              end
-
-              if locals[:edit_action] == :authorize
-                locals[:edit_action] = (EffectiveDatatables.authorized?(controller, :edit, collection_class) rescue false)
-              end
-
-              if locals[:destroy_action] == :authorize
-                locals[:destroy_action] = (EffectiveDatatables.authorized?(controller, :destroy, collection_class) rescue false)
-              end
-
-              if locals[:unarchive_action] == :authorize
-                locals[:unarchive_action] = (EffectiveDatatables.authorized?(controller, :unarchive, collection_class) rescue false)
-              end
-            end
-
-            # If locals[:show_action] == :authorize_each, this will get run again.
+            add_actions_column_locals(locals) if opts[:type] == :actions
 
             rendered[name] = (render(
               :partial => opts[:partial],
@@ -105,18 +81,26 @@ module Effective
         collection.each_with_index.map do |obj, index|
           (display_table_columns || table_columns).map do |name, opts|
             begin
-              if opts[:visible] == false
+              if opts[:visible] == false && (name != order_name.to_s) # Sort by invisible array column
                 BLANK
-              elsif opts[:partial]
-                rendered[name][index]
               elsif opts[:block]
-                view.instance_exec(obj, collection, self, &opts[:block])
+                begin
+                  view.instance_exec(obj, collection, self, &opts[:block])
+                rescue NoMethodError => e
+                  if opts[:type] == :actions && e.message == 'super called outside of method'
+                    rendered[name][index]
+                  else
+                    raise(e)
+                  end
+                end
               elsif opts[:proc]
                 view.instance_exec(obj, collection, self, &opts[:proc])
+              elsif opts[:partial]
+                rendered[name][index]
               elsif opts[:type] == :belongs_to
-                (obj.send(name) rescue nil)
+                (obj.send(name) rescue nil).to_s
               elsif opts[:type] == :belongs_to_polymorphic
-                (obj.send(name) rescue nil)
+                (obj.send(name) rescue nil).to_s
               elsif opts[:type] == :has_many
                 (obj.send(name).map { |obj| obj.to_s }.join('<br>') rescue BLANK)
               elsif opts[:type] == :has_and_belongs_to_many
@@ -133,6 +117,8 @@ module Effective
                 (obj.send(:roles) rescue [])
               elsif obj.kind_of?(Array) # Array backed collection
                 obj[opts[:array_index]]
+              elsif opts[:sql_as_column]
+                obj[name] || obj.send(name)
               else
                 obj.send(name)
               end
@@ -226,6 +212,121 @@ module Effective
             end
           end
         end
+      end
+
+      protected
+
+      def add_actions_column_locals(locals)
+        return unless active_record_collection?
+
+        if locals[:show_action] == :authorize
+          locals[:show_action] = (EffectiveDatatables.authorized?(controller, :show, collection_class) rescue false)
+        end
+
+        if locals[:edit_action] == :authorize
+          locals[:edit_action] = (EffectiveDatatables.authorized?(controller, :edit, collection_class) rescue false)
+        end
+
+        if locals[:destroy_action] == :authorize
+          locals[:destroy_action] = (EffectiveDatatables.authorized?(controller, :destroy, collection_class) rescue false)
+        end
+
+        if locals[:unarchive_action] == :authorize
+          locals[:unarchive_action] = (EffectiveDatatables.authorized?(controller, :unarchive, collection_class) rescue false)
+        end
+
+        # Then we look at the routes to see if these actions _actually_ exist
+
+        routes = Rails.application.routes
+
+        begin
+          resource = collection_class.new(id: 123)
+          resource.define_singleton_method(:persisted?) { true }  # We override persisted? to get the correct action urls
+          raise 'no to param' unless resource.to_param.present?
+        rescue => e
+          return
+        end
+
+        if (locals[:show_action] == true || locals[:show_action] == :authorize_each) && !locals[:show_path]
+          # Try our namespace
+          url = (view.polymorphic_path([*controller_namespace, resource]) rescue false)
+          url = false if url && !(routes.recognize_path(url) rescue false)
+
+          # Try no namespace
+          unless url
+            url = (view.polymorphic_path(resource) rescue false)
+            url = false if url && !(routes.recognize_path(url) rescue false)
+          end
+
+          # So if we have a URL, this is an action we can link to
+          if url
+            locals[:show_path] = url.gsub("/#{resource.to_param}", '/:to_param')
+          else
+            locals[:show_action] = false
+          end
+        end
+
+        if (locals[:edit_action] == true || locals[:edit_action] == :authorize_each) && !locals[:edit_path]
+          # Try our namespace
+          url = (view.edit_polymorphic_path([*controller_namespace, resource]) rescue false)
+          url = false if url && !(routes.recognize_path(url) rescue false)
+
+          # Try no namespace
+          unless url
+            url = (view.edit_polymorphic_path(resource) rescue false)
+            url = false if url && !(routes.recognize_path(url) rescue false)
+          end
+
+          # So if we have a URL, this is an action we can link to
+          if url
+            locals[:edit_path] = url.gsub("/#{resource.to_param}", '/:to_param')
+          else
+            locals[:edit_action] = false
+          end
+        end
+
+        if (locals[:destroy_action] == true || locals[:destroy_action] == :authorize_each) && !locals[:destroy_path]
+          # Try our namespace
+          url = (view.polymorphic_path([*controller_namespace, resource]) rescue false)
+          url = false if url && !(routes.recognize_path(url, method: :delete) rescue false)
+
+          # Try no namespace
+          unless url
+            url = (view.polymorphic_path(resource) rescue false)
+            url = false if url && !(routes.recognize_path(url, method: :delete) rescue false)
+          end
+
+          # So if we have a URL, this is an action we can link to
+          if url
+            locals[:destroy_path] = url.gsub("/#{resource.to_param}", '/:to_param')
+          else
+            locals[:destroy_action] = false
+          end
+        end
+
+        if resource.respond_to?(:archived?)
+          if (locals[:unarchive_action] == true || locals[:unarchive_action] == :authorize_each) && !locals[:unarchive_path]
+            # Try our namespace
+            url = (view.polymorphic_path([*controller_namespace, resource], action: :unarchive) rescue false)
+            url = false if url && !(routes.recognize_path(url) rescue false)
+
+            # Try no namespace
+            unless url
+              url = (view.polymorphic_path(resource, action: :unarchive) rescue false)
+              url = false if url && !(routes.recognize_path(url) rescue false)
+            end
+
+            # So if we have a URL, this is an action we can link to
+            if url
+              locals[:unarchive_path] = url.gsub("/#{resource.to_param}", '/:to_param')
+            else
+              locals[:unarchive_action] = false
+            end
+          end
+        else
+          locals[:unarchive_action] = false
+        end
+
       end
 
       private

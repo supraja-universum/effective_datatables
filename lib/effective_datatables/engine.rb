@@ -8,6 +8,9 @@ module EffectiveDatatables
     initializer 'effective_datatables.action_controller' do |app|
       ActiveSupport.on_load :action_controller do
         helper EffectiveDatatablesHelper
+        helper EffectiveDatatablesPrivateHelper
+
+        ActionController::Base.send :include, ::EffectiveDatatablesControllerHelper
       end
     end
 
